@@ -60,7 +60,7 @@ ${TEST_USERNAME}            ${EMPTY}
 ${TEST_PASSWORD}            ${EMPTY}
 
 # ── API Layer ──────────────────────────────────────────────────────────────────
-${API_BASE_URL}             https://miox-backend-dev.ikp1001rnp.cloud.uk.hsbc
+${API_BASE_URL}             
 ${API_TOKEN}                ${EMPTY}
 ${API_TIMEOUT}              30s
 ${API_CONNECT_TIMEOUT}      10s
