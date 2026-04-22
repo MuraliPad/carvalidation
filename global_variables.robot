@@ -18,7 +18,7 @@ Documentation    Global configuration variables for MiO-X test suite.
 *** Variables ***
 # ── Environment ────────────────────────────────────────────────────────────────
 ${ENV}                      dev
-${BASE_URL}                 https://miox-dev.ikp1001rnp.cloud.uk.hsbc
+${BASE_URL}                 
 ${BROWSER}                  chrome
 
 # ── Driver Paths ───────────────────────────────────────────────────────────────
