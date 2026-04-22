@@ -9,10 +9,11 @@ Documentation    Browser setup and teardown keywords.
 ...                chrome | headlesschrome | edge | headlessedge | firefox
 ...
 ...              Driver path resolution (local mode only):
-...                1. CHROMEDRIVER_PATH / EDGEDRIVER_PATH / FIREFOXDRIVER_PATH set
-...                   → uses that explicit path (recommended on corp machines)
-...                2. Path variables left empty
-...                   → SeleniumLibrary finds the driver from System PATH
+...                Option 1 – Set CHROMEDRIVER_PATH / EDGEDRIVER_PATH / FIREFOXDRIVER_PATH
+...                           in global_variables.robot or pass via --variable at runtime.
+...                           e.g. robot --variable CHROMEDRIVER_PATH:C:/drivers/chromedriver.exe
+...                Option 2 – Leave path variables empty and put the driver on System PATH.
+...                           SeleniumLibrary finds it automatically.
 
 Library     SeleniumLibrary
 Library     OperatingSystem
@@ -46,8 +47,7 @@ Close All Browser Windows
 # ════════════════════════════════════════════════════════════════════
 
 _Open Local Browser
-    [Documentation]    Resolves driver path then opens the correct local browser.
-    ...                Switch: chrome | headlesschrome | edge | headlessedge | firefox
+    [Documentation]    Switch on BROWSER value → opens the correct browser.
     ${b}=    Evaluate    $BROWSER.lower()
     Run Keyword If         '${b}' == 'chrome'
     ...    _Open Chrome    headed    ${CHROMEDRIVER_PATH}
@@ -60,18 +60,18 @@ _Open Local Browser
     ...    ELSE IF         '${b}' == 'firefox'
     ...    _Open Firefox             ${FIREFOXDRIVER_PATH}
     ...    ELSE
-    ...    Fail
-    ...    ❌ Unknown browser: "${BROWSER}". Use chrome | headlesschrome | edge | headlessedge | firefox
+    ...    Fail    Browser "${BROWSER}" not supported. Use: chrome, headlesschrome, edge, headlessedge, firefox
 
 # ════════════════════════════════════════════════════════════════════
 # BROWSER IMPLEMENTATIONS
-# Each keyword accepts:
-#   mode        – headed | headless  (Chrome and Edge only)
-#   driver_path – full path to driver exe, or ${EMPTY} for System PATH
+#
+# driver_path = ${EMPTY}  →  uses System PATH  (no extra config needed)
+# driver_path = <path>    →  uses that explicit exe file
 # ════════════════════════════════════════════════════════════════════
 
 _Open Chrome
     [Arguments]    ${mode}    ${driver_path}
+    # Build Chrome options
     ${options}=    Evaluate
     ...    __import__('selenium.webdriver', fromlist=['ChromeOptions']).ChromeOptions()
     Run Keyword If    '${mode}' == 'headless'
@@ -79,63 +79,67 @@ _Open Chrome
     Call Method    ${options}    add_argument    --no-sandbox
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
     Call Method    ${options}    add_argument    --disable-gpu
+    # Open browser – with explicit path or via System PATH
     Run Keyword If    '${driver_path}' != '${EMPTY}'
-    ...    _Open With Explicit Path    chrome    ${driver_path}    ${options}
+    ...    _Launch With Service    chrome    ${driver_path}    ${options}
     ...    ELSE
     ...    Open Browser    url=${BASE_URL}    browser=chrome    options=${options}
 
 _Open Edge
     [Arguments]    ${mode}    ${driver_path}
+    # Build Edge options
     ${options}=    Evaluate
     ...    __import__('selenium.webdriver', fromlist=['EdgeOptions']).EdgeOptions()
     Run Keyword If    '${mode}' == 'headless'
     ...    Call Method    ${options}    add_argument    --headless=new
     Call Method    ${options}    add_argument    --no-sandbox
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
+    # Open browser – with explicit path or via System PATH
     Run Keyword If    '${driver_path}' != '${EMPTY}'
-    ...    _Open With Explicit Path    edge    ${driver_path}    ${options}
+    ...    _Launch With Service    edge    ${driver_path}    ${options}
     ...    ELSE
     ...    Open Browser    url=${BASE_URL}    browser=edge    options=${options}
 
 _Open Firefox
     [Arguments]    ${driver_path}
+    # Open browser – with explicit path or via System PATH
     Run Keyword If    '${driver_path}' != '${EMPTY}'
-    ...    _Open With Explicit Path    firefox    ${driver_path}    ${None}
+    ...    _Launch With Service    firefox    ${driver_path}    ${NONE}
     ...    ELSE
     ...    Open Browser    url=${BASE_URL}    browser=firefox
 
 # ════════════════════════════════════════════════════════════════════
-# EXPLICIT DRIVER PATH HELPER  (Selenium 4 Service pattern)
+# EXPLICIT PATH LAUNCHER  (Selenium 4 Service pattern)
+#
+# BUG FIX 1: File Should Exist msg= is now a single string variable –
+#            multi-line continuation after a named arg caused the
+#            "positional argument after named argument" parse error.
+#
+# BUG FIX 2: The condition '${driver_path}' != '${EMPTY}' in _Open Chrome
+#            now correctly guards this keyword so it is ONLY called when
+#            a real path string is provided.
 # ════════════════════════════════════════════════════════════════════
 
-_Open With Explicit Path
+_Launch With Service
     [Arguments]    ${browser}    ${driver_path}    ${options}
-    [Documentation]    Validates the driver file exists then opens the browser
-    ...                using a Selenium 4 Service object so the driver path
-    ...                is passed correctly (executable_path is deprecated in Se4).
-    File Should Exist    ${driver_path}
-    ...    msg=❌ Driver not found: "${driver_path}"\n
-    ...    Download manually and set the correct path in global_variables.robot\n
-    ...    Chrome: https://googlechromelabs.github.io/chrome-for-testing/\n
-    ...    Edge:   https://developer.microsoft.com/microsoft-edge/tools/webdriver/
+    # Validate the driver file exists – single-line msg to avoid parse error
+    ${err}=    Set Variable    Driver not found at "${driver_path}". Set correct path in global_variables.robot or pass --variable CHROMEDRIVER_PATH:<path>
+    File Should Exist    ${driver_path}    msg=${err}
 
+    # Build the Selenium 4 Service object for the correct browser
     ${b}=    Evaluate    $browser.lower()
     ${service}=    Run Keyword If    '${b}' == 'chrome'
-    ...    Evaluate
-    ...    __import__('selenium.webdriver.chrome.service', fromlist=['Service']).Service(executable_path=r'${driver_path}')
+    ...    Evaluate    __import__('selenium.webdriver.chrome.service', fromlist=['Service']).Service(r'${driver_path}')
     ...    ELSE IF    '${b}' == 'edge'
-    ...    Evaluate
-    ...    __import__('selenium.webdriver.edge.service', fromlist=['Service']).Service(executable_path=r'${driver_path}')
+    ...    Evaluate    __import__('selenium.webdriver.edge.service', fromlist=['Service']).Service(r'${driver_path}')
     ...    ELSE IF    '${b}' == 'firefox'
-    ...    Evaluate
-    ...    __import__('selenium.webdriver.firefox.service', fromlist=['Service']).Service(executable_path=r'${driver_path}')
+    ...    Evaluate    __import__('selenium.webdriver.firefox.service', fromlist=['Service']).Service(r'${driver_path}')
 
-    Run Keyword If    ${options} is not None
-    ...    Open Browser    url=${BASE_URL}    browser=${browser}
-    ...    service=${service}    options=${options}
+    # Open browser – pass options only for Chrome/Edge (Firefox has no options arg here)
+    Run Keyword If    $options is not None
+    ...    Open Browser    url=${BASE_URL}    browser=${browser}    service=${service}    options=${options}
     ...    ELSE
-    ...    Open Browser    url=${BASE_URL}    browser=${browser}
-    ...    service=${service}
+    ...    Open Browser    url=${BASE_URL}    browser=${browser}    service=${service}
 
 # ════════════════════════════════════════════════════════════════════
 # REMOTE SELENIUM GRID
@@ -143,8 +147,9 @@ _Open With Explicit Path
 
 _Open Remote Browser
     [Documentation]    Connects to a Selenium Grid hub.
-    ...                Set REMOTE_URL to your grid endpoint, e.g:
-    ...                  http://<grid-host>:4444/wd/hub
+    ...                Configure REMOTE_URL in global_variables.robot or pass:
+    ...                  robot --variable USE_REMOTE:True
+    ...                        --variable REMOTE_URL:http://<host>:4444/wd/hub
     ${caps}=    Create Dictionary    browserName=${BROWSER}
     Open Browser
     ...    url=${BASE_URL}
