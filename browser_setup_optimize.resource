@@ -1,4 +1,4 @@
-$*** Settings ***
+*** Settings ***
 Documentation    Base browser management keywords.
 ...
 ...              ╔══════════════════════════════════════════════════════════╗
@@ -15,26 +15,18 @@ Documentation    Base browser management keywords.
 ...              ║       FIREFOXDRIVER_PATH set → explicit path            ║
 ...              ║    4. Everything empty      → System PATH               ║
 ...              ╠══════════════════════════════════════════════════════════╣
-...              ║  CONFIGURE IN global_variables.robot:                   ║
-...              ║    ${BROWSER}              chrome                       ║
-...              ║    ${CHROMEDRIVER_PATH}    C:/drivers/chromedriver.exe  ║
-...              ║    ${EDGEDRIVER_PATH}      C:/drivers/msedgedriver.exe  ║
-...              ║    ${FIREFOXDRIVER_PATH}   C:/drivers/geckodriver.exe   ║
-...              ║    ${USE_WEBDRIVER_MANAGER}  ${TRUE}                    ║
-...              ║                                                          ║
-...              ║  OR OVERRIDE AT RUNTIME:                                ║
-...              ║    robot --variable BROWSER:edge                        ║
-...              ║    robot --variable EDGEDRIVER_PATH:C:/drv/edge.exe     ║
+...              ║  NOTE: String library is intentionally NOT imported.    ║
+...              ║  All lowercase conversion uses Python Evaluate inline   ║
+...              ║  to avoid any keyword routing ambiguity.                ║
 ...              ╚══════════════════════════════════════════════════════════╝
 
+# ── INTENTIONALLY NO "Library    String" ─────────────────────────────────────
+# Using Evaluate + Python .lower() directly avoids the String library routing
+# the "Convert To Lower Case" keyword and showing up in logs incorrectly.
 Library    SeleniumLibrary
 Library    OperatingSystem
 Library    Process
 Resource   ../config/global_variables.robot
-
-*** Variables ***
-# Driver path for Firefox – mirrors chrome/edge pattern in global_variables.robot
-${FIREFOXDRIVER_PATH}    ${EMPTY}
 
 *** Keywords ***
 # ════════════════════════════════════════════════════════════════════
@@ -42,8 +34,8 @@ ${FIREFOXDRIVER_PATH}    ${EMPTY}
 # ════════════════════════════════════════════════════════════════════
 
 Open Browser And Navigate To App
-    [Documentation]    Single entry point for all browser/driver combinations.
-    ...                Resolves driver, opens the browser, then navigates to BASE_URL.
+    [Documentation]    Single entry point. Resolves driver path, opens the
+    ...                correct browser, then navigates to BASE_URL.
     ${driver_path}=    _Resolve Driver Path
     _Launch Browser    ${BROWSER}    ${driver_path}
     Set Window Size                  ${WINDOW_WIDTH}    ${WINDOW_HEIGHT}
@@ -51,160 +43,170 @@ Open Browser And Navigate To App
     Set Selenium Page Load Timeout   ${PAGE_LOAD_TIMEOUT}
     Go To                            ${BASE_URL}
     Wait For Page To Be Ready
-    Log    ✔ ${BROWSER} opened → ${BASE_URL}  (driver: ${driver_path})
+    Log    ✔ ${BROWSER} opened → ${BASE_URL}
 
 Close All Browser Windows
     Close All Browsers
 
 # ════════════════════════════════════════════════════════════════════
 # STEP 1 – RESOLVE DRIVER PATH
-# Returns the driver executable path as a string, or EMPTY for PATH/Grid.
+#
+# Pure logic — no browser is opened here.
+# Returns the resolved driver path string, or ${EMPTY} for System PATH.
+# Uses Python .lower() via Evaluate — NO String library dependency.
 # ════════════════════════════════════════════════════════════════════
 
 _Resolve Driver Path
-    [Documentation]    Works out which driver path to use based on config.
-    ...                Returns EMPTY when no explicit path is needed
-    ...                (Grid mode or System PATH mode).
-    # Remote Grid – no local driver needed
+    # ── Remote Grid: no local driver needed ──────────────────────────
     Return From Keyword If    ${USE_REMOTE}    ${EMPTY}
 
-    # webdriver-manager – auto-download and return path
-    Return From Keyword If    ${USE_WEBDRIVER_MANAGER}
+    # ── webdriver-manager: auto-download ─────────────────────────────
+    ${wdm_path}=    Run Keyword If    ${USE_WEBDRIVER_MANAGER}
     ...    _Download Driver Via WDM    ${BROWSER}
+    Return From Keyword If    ${USE_WEBDRIVER_MANAGER}    ${wdm_path}
 
-    # Explicit path variables set in global_variables.robot or CLI
-    ${lower}=    Convert To Lowercase    ${BROWSER}
+    # ── Explicit path: use Python .lower() for case-safe comparison ──
+    # Evaluate returns a plain Python string – no String library needed.
+    ${b}=    Evaluate    $BROWSER.lower()
+
     Return From Keyword If
-    ...    '${lower}' in ['chrome','headlesschrome'] and '${CHROMEDRIVER_PATH}' != '${EMPTY}'
+    ...    '${b}' in ['chrome', 'headlesschrome'] and '${CHROMEDRIVER_PATH}' != ''
     ...    ${CHROMEDRIVER_PATH}
+
     Return From Keyword If
-    ...    '${lower}' in ['edge','headlessedge'] and '${EDGEDRIVER_PATH}' != '${EMPTY}'
+    ...    '${b}' in ['edge', 'headlessedge'] and '${EDGEDRIVER_PATH}' != ''
     ...    ${EDGEDRIVER_PATH}
+
     Return From Keyword If
-    ...    '${lower}' == 'firefox' and '${FIREFOXDRIVER_PATH}' != '${EMPTY}'
+    ...    '${b}' == 'firefox' and '${FIREFOXDRIVER_PATH}' != ''
     ...    ${FIREFOXDRIVER_PATH}
 
-    # System PATH – SeleniumLibrary finds driver automatically
+    # ── System PATH fallback ──────────────────────────────────────────
+    Log    No explicit driver path set – using System PATH
     [Return]    ${EMPTY}
+
+# ════════════════════════════════════════════════════════════════════
+# WEBDRIVER-MANAGER DOWNLOAD
+# One Python subprocess call per browser type – no String library.
+# ════════════════════════════════════════════════════════════════════
 
 _Download Driver Via WDM
     [Arguments]    ${browser}
-    [Documentation]    Calls webdriver-manager for the given browser and returns
-    ...                the downloaded driver path. One Python call per browser type.
-    ${lower}=    Convert To Lowercase    ${browser}
+    ${b}=    Evaluate    $browser.lower()
 
-    # ── Single switch: map browser → webdriver-manager import + class ──
-    ${wdm_import}=    Set Variable If
-    ...    '${lower}' in ['chrome','headlesschrome']
+    # ── switch: map browser name → WDM one-liner ─────────────────────
+    ${wdm_cmd}=    Set Variable If
+    ...    '${b}' in ['chrome', 'headlesschrome']
     ...        from webdriver_manager.chrome import ChromeDriverManager; print(ChromeDriverManager().install())
-    ...    '${lower}' in ['edge','headlessedge']
+    ...    '${b}' in ['edge', 'headlessedge']
     ...        from webdriver_manager.microsoft import EdgeChromiumDriverManager; print(EdgeChromiumDriverManager().install())
-    ...    '${lower}' == 'firefox'
+    ...    '${b}' == 'firefox'
     ...        from webdriver_manager.firefox import GeckoDriverManager; print(GeckoDriverManager().install())
+    ...    ${None}
 
-    Should Not Be Equal    ${wdm_import}    ${None}
-    ...    msg=❌ webdriver-manager: unsupported browser "${browser}". Supported: chrome, edge, firefox.
+    Should Not Be Equal    ${wdm_cmd}    ${None}
+    ...    msg=webdriver-manager: unsupported browser "${browser}". Use chrome | edge | firefox.
 
-    ${result}=    Run Process    python    -c    ${wdm_import}
-    ...    stdout=PIPE    stderr=PIPE
+    ${result}=    Run Process    python    -c    ${wdm_cmd}    stdout=PIPE    stderr=PIPE
     Should Be Equal As Integers    ${result.rc}    0
-    ...    msg=❌ webdriver-manager install failed for "${browser}":\n${result.stderr}
+    ...    msg=webdriver-manager failed for "${browser}":\n${result.stderr}
 
-    ${path}=    Strip String    ${result.stdout}
-    Log    ✔ webdriver-manager resolved: ${path}
+    ${path}=    Evaluate    $result.stdout.strip()
+    Log    ✔ webdriver-manager path: ${path}
     [Return]    ${path}
 
 # ════════════════════════════════════════════════════════════════════
-# STEP 2 – LAUNCH BROWSER  (single switch statement)
+# STEP 2 – LAUNCH BROWSER  ← THE SINGLE SWITCH STATEMENT
 #
-# Dispatches to the correct Open Browser call based on browser name.
-# All three modes (Grid / explicit path / System PATH) pass through here.
-# driver_path=EMPTY  →  SeleniumLibrary uses System PATH or Grid URL.
+# All three driver modes (Grid / explicit path / System PATH) flow here.
+# driver_path=${EMPTY}  →  SeleniumLibrary uses System PATH automatically.
+# driver_path=<path>    →  passed to the Service object (Selenium 4+).
+#
+# Uses Python .lower() via Evaluate — NO String library dependency.
 # ════════════════════════════════════════════════════════════════════
 
 _Launch Browser
     [Arguments]    ${browser}    ${driver_path}
-    [Documentation]    ── SWITCH on browser name ──────────────────────────
-    ...
-    ...                chrome          → Chrome, headed
-    ...                headlesschrome  → Chrome, headless
-    ...                edge            → Edge, headed
-    ...                headlessedge    → Edge, headless
-    ...                firefox         → Firefox, headed
-    ...
-    ...                driver_path: pass EMPTY to use System PATH / Grid.
-    ${lower}=    Convert To Lowercase    ${browser}
+    ${b}=    Evaluate    $browser.lower()
 
-    # ── switch ────────────────────────────────────────────────────
-    Run Keyword If    '${lower}' == 'chrome'
-    ...    _Open Chrome              headed     ${driver_path}
-    ...    ELSE IF    '${lower}' == 'headlesschrome'
-    ...    _Open Chrome              headless   ${driver_path}
-    ...    ELSE IF    '${lower}' == 'edge'
-    ...    _Open Edge                headed     ${driver_path}
-    ...    ELSE IF    '${lower}' == 'headlessedge'
-    ...    _Open Edge                headless   ${driver_path}
-    ...    ELSE IF    '${lower}' == 'firefox'
-    ...    _Open Firefox                        ${driver_path}
-    ...    ELSE IF    ${USE_REMOTE}
+    # ── switch ────────────────────────────────────────────────────────
+    Run Keyword If         '${b}' == 'chrome'
+    ...    _Open Chrome    headed    ${driver_path}
+    ...    ELSE IF         '${b}' == 'headlesschrome'
+    ...    _Open Chrome    headless  ${driver_path}
+    ...    ELSE IF         '${b}' == 'edge'
+    ...    _Open Edge      headed    ${driver_path}
+    ...    ELSE IF         '${b}' == 'headlessedge'
+    ...    _Open Edge      headless  ${driver_path}
+    ...    ELSE IF         '${b}' == 'firefox'
+    ...    _Open Firefox             ${driver_path}
+    ...    ELSE IF         ${USE_REMOTE}
     ...    _Open Remote
     ...    ELSE
-    ...    Fail
-    ...    ❌ Unsupported browser: "${browser}". Use chrome | headlesschrome | edge | headlessedge | firefox
+    ...    Fail    ❌ Unknown browser: "${browser}". Use chrome | headlesschrome | edge | headlessedge | firefox
 
 # ════════════════════════════════════════════════════════════════════
-# BROWSER IMPLEMENTATIONS  (one keyword per browser family)
+# BROWSER IMPLEMENTATIONS – one keyword per family
+#
+# driver_path handling (Selenium 4 compatible):
+#   ${EMPTY}  → no Service passed → SeleniumLibrary uses System PATH
+#   <path>    → ChromeService / EdgeService / FirefoxService created
+#               via Evaluate and passed as service= argument
 # ════════════════════════════════════════════════════════════════════
 
 _Open Chrome
     [Arguments]    ${mode}    ${driver_path}
-    [Documentation]    Opens Chrome headed or headless.
-    ...                mode: headed | headless
+    # Build options
     ${options}=    Evaluate
     ...    __import__('selenium.webdriver', fromlist=['ChromeOptions']).ChromeOptions()
     Run Keyword If    '${mode}' == 'headless'
-    ...    Call Method    ${options}    add_argument    --headless\=new
+    ...    Call Method    ${options}    add_argument    --headless=new
     Call Method    ${options}    add_argument    --no-sandbox
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
     Call Method    ${options}    add_argument    --disable-gpu
+
+    # Build service only when an explicit path is provided
+    ${service}=    Run Keyword If    '${driver_path}' != '${EMPTY}'
+    ...    _Build Chrome Service    ${driver_path}
+
+    # Open browser – service=None is ignored by SeleniumLibrary
     Run Keyword If    '${driver_path}' != '${EMPTY}'
-    ...    _Validate Driver File    ${driver_path}
-    Open Browser
-    ...    url=${BASE_URL}
-    ...    browser=chrome
-    ...    executable_path=${driver_path}
+    ...    Open Browser    url=${BASE_URL}    browser=chrome
+    ...    service=${service}    options=${options}
+    ...    ELSE
+    ...    Open Browser    url=${BASE_URL}    browser=chrome
     ...    options=${options}
 
 _Open Edge
     [Arguments]    ${mode}    ${driver_path}
-    [Documentation]    Opens Edge headed or headless.
-    ...                mode: headed | headless
     ${options}=    Evaluate
     ...    __import__('selenium.webdriver', fromlist=['EdgeOptions']).EdgeOptions()
     Run Keyword If    '${mode}' == 'headless'
-    ...    Call Method    ${options}    add_argument    --headless\=new
+    ...    Call Method    ${options}    add_argument    --headless=new
     Call Method    ${options}    add_argument    --no-sandbox
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
+
+    ${service}=    Run Keyword If    '${driver_path}' != '${EMPTY}'
+    ...    _Build Edge Service    ${driver_path}
+
     Run Keyword If    '${driver_path}' != '${EMPTY}'
-    ...    _Validate Driver File    ${driver_path}
-    Open Browser
-    ...    url=${BASE_URL}
-    ...    browser=edge
-    ...    executable_path=${driver_path}
+    ...    Open Browser    url=${BASE_URL}    browser=edge
+    ...    service=${service}    options=${options}
+    ...    ELSE
+    ...    Open Browser    url=${BASE_URL}    browser=edge
     ...    options=${options}
 
 _Open Firefox
     [Arguments]    ${driver_path}
-    [Documentation]    Opens Firefox (headed only – headless via browser profile if needed).
+    ${service}=    Run Keyword If    '${driver_path}' != '${EMPTY}'
+    ...    _Build Firefox Service    ${driver_path}
+
     Run Keyword If    '${driver_path}' != '${EMPTY}'
-    ...    _Validate Driver File    ${driver_path}
-    Open Browser
-    ...    url=${BASE_URL}
-    ...    browser=firefox
-    ...    executable_path=${driver_path}
+    ...    Open Browser    url=${BASE_URL}    browser=firefox    service=${service}
+    ...    ELSE
+    ...    Open Browser    url=${BASE_URL}    browser=firefox
 
 _Open Remote
-    [Documentation]    Opens a browser on a remote Selenium Grid node.
     ${caps}=    Create Dictionary    browserName=${BROWSER}
     Open Browser
     ...    url=${BASE_URL}
@@ -214,14 +216,34 @@ _Open Remote
     Log    ✔ Remote browser via Grid: ${REMOTE_URL}
 
 # ════════════════════════════════════════════════════════════════════
-# GUARD – validates the driver file exists before attempting to open
+# SERVICE BUILDERS – Selenium 4 compatible
+# Uses selenium.webdriver.chrome/edge/firefox.service.Service
+# which accepts executable_path as first positional argument.
 # ════════════════════════════════════════════════════════════════════
 
-_Validate Driver File
-    [Arguments]    ${path}
-    File Should Exist    ${path}
-    ...    msg=❌ Driver not found: "${path}"\n \
-    ...         Fix: check the path in global_variables.robot, or set USE_WEBDRIVER_MANAGER:${TRUE}
+_Build Chrome Service
+    [Arguments]    ${driver_path}
+    File Should Exist    ${driver_path}
+    ...    msg=❌ chromedriver not found at: "${driver_path}"
+    ${service}=    Evaluate
+    ...    __import__('selenium.webdriver.chrome.service', fromlist=['Service']).Service(executable_path=r'${driver_path}')
+    [Return]    ${service}
+
+_Build Edge Service
+    [Arguments]    ${driver_path}
+    File Should Exist    ${driver_path}
+    ...    msg=❌ msedgedriver not found at: "${driver_path}"
+    ${service}=    Evaluate
+    ...    __import__('selenium.webdriver.edge.service', fromlist=['Service']).Service(executable_path=r'${driver_path}')
+    [Return]    ${service}
+
+_Build Firefox Service
+    [Arguments]    ${driver_path}
+    File Should Exist    ${driver_path}
+    ...    msg=❌ geckodriver not found at: "${driver_path}"
+    ${service}=    Evaluate
+    ...    __import__('selenium.webdriver.firefox.service', fromlist=['Service']).Service(executable_path=r'${driver_path}')
+    [Return]    ${service}
 
 # ════════════════════════════════════════════════════════════════════
 # NAVIGATION
