@@ -105,9 +105,12 @@ Resolve Environment URLs
     Set Suite Variable    ${BASE_URL}       ${urls}[ui]
     Set Suite Variable    ${API_BASE_URL}   ${urls}[api]
 
-    Log    ✔ ENV=${ENV} resolved
-    Log    ✔ BASE_URL     = ${BASE_URL}
-    Log    ✔ API_BASE_URL = ${API_BASE_URL}
+    ${log_env}=    Set Variable    ENV resolved: ${ENV}
+    ${log_ui}=     Set Variable    BASE_URL: ${BASE_URL}
+    ${log_api}=    Set Variable    API_BASE_URL: ${API_BASE_URL}
+    Log    ${log_env}
+    Log    ${log_ui}
+    Log    ${log_api}
 
 # ════════════════════════════════════════════════════════════════════
 # HELPER – read the current resolved URLs (useful for assertions)
@@ -125,10 +128,13 @@ Log Environment Info
     [Documentation]    Logs a summary of the active environment.
     ...                Useful at the start of a suite to confirm which
     ...                environment the tests are running against.
-    Log    ══════════════════════════════════════════
-    Log    Environment : ${ENV}
-    Log    UI URL      : ${BASE_URL}
-    Log    API URL     : ${API_BASE_URL}
-    Log    Browser     : ${BROWSER}
-    Log    Remote Grid : ${USE_REMOTE}
-    Log    ══════════════════════════════════════════
+    ${l1}=    Set Variable    Environment: ${ENV}
+    ${l2}=    Set Variable    UI URL: ${BASE_URL}
+    ${l3}=    Set Variable    API URL: ${API_BASE_URL}
+    ${l4}=    Set Variable    Browser: ${BROWSER}
+    ${l5}=    Set Variable    Remote Grid: ${USE_REMOTE}
+    Log    ${l1}
+    Log    ${l2}
+    Log    ${l3}
+    Log    ${l4}
+    Log    ${l5}
