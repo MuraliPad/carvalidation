@@ -1,0 +1,14 @@
+[
+  {
+    "_comment": "Replace this file with real cookies extracted from your VDI.",
+    "_instructions": "Run: robot scripts/extract_cookies.robot on your VDI after SSO login.",
+    "_security": "NEVER commit this file to a public git repository.",
+    "_expiry": "Corporate SSO cookies typically expire after 8-24 hours. Re-extract when tests fail with SSO redirect.",
+    "name": "EXAMPLE_SESSION_COOKIE",
+    "value": "replace-with-real-value",
+    "domain": ".cloud.uk.hsbc",
+    "path": "/",
+    "secure": true,
+    "httpOnly": true
+  }
+]
