@@ -66,11 +66,17 @@ ${CHROME_PROFILE_NAME}  Default
 Login Via SSO And Wait For App Shell
     [Documentation]    Injects saved SSO cookies into the browser so the app
     ...                sees an authenticated session without going through the
-    ...                SSO prompt. Falls back to direct SSO click if no cookie
-    ...                file is present (VDI local run).
+    ...                SSO prompt.
     ...
+    ...                Works for BOTH local and remote browser execution:
+    ...                  Local:  cookies.json read from VDI, injected into local Chrome
+    ...                  Remote: cookies.json read from VDI (file stays on VDI),
+    ...                          injected into the remote browser via WebDriver protocol.
+    ...                          SeleniumLibrary's Add Cookie sends commands to whichever
+    ...                          browser the WebDriver session is connected to.
+    ...
+    ...                Falls back to SSO button click if no cookies.json found.
     ...                Cookie file: config/testdata/cookies.json
-    ...                Extract cookies from VDI DevTools console (see header).
     ${has_cookies}=    Run Keyword And Return Status
     ...    File Should Exist    ${COOKIES_FILE}
     Run Keyword If    ${has_cookies}
@@ -84,35 +90,61 @@ Login Via SSO And Wait For App Shell
     ...    error=App shell did not load after SSO. Check cookie freshness or SSO button flow.
 
 _Login Via Cookie Injection
-    [Documentation]    Loads the app URL (which may redirect to SSO), then
-    ...                injects the saved cookies, then reloads to apply them.
-    Log    Injecting SSO cookies from ${COOKIES_FILE}
-    # Navigate to the base domain first so cookies can be set
+    [Documentation]    Injects SSO cookies into the currently open browser session.
+    ...
+    ...                Works identically for local and remote browsers:
+    ...                  1. Navigate to BASE_URL (browser opens on local or Grid node)
+    ...                  2. Read cookies.json from the VDI filesystem (file stays on VDI)
+    ...                  3. Call Add Cookie for each entry (WebDriver sends to the browser,
+    ...                     whether that browser is local or on a remote Grid node)
+    ...                  4. Reload page so the browser sees the injected session cookies
+    ${log_msg}=    Set Variable    Injecting SSO cookies from ${COOKIES_FILE}
+    Log    ${log_msg}
+    # Navigate to the base domain first – cookies can only be set for the current domain
     Go To    ${BASE_URL}
     Sleep    ${ANIMATION_WAIT}
     _Inject Cookies From File    ${COOKIES_FILE}
-    # Reload so the app sees the injected cookies
+    # Reload so the server sees the injected session cookies in the request headers
     Reload Page
     Wait For Condition    return document.readyState == "complete"    timeout=30s
     Log    ✔ Cookies injected and page reloaded
 
 _Inject Cookies From File
     [Arguments]    ${cookie_file}
-    [Documentation]    Reads cookies.json and adds each cookie to the browser
-    ...                via SeleniumLibrary's Add Cookie keyword.
-    ${raw}=       Get File         ${cookie_file}
-    ${cookies}=   Evaluate         __import__('json').loads($raw)
+    [Documentation]    Reads cookies.json from the VDI and sends each cookie
+    ...                to the browser via Add Cookie (WebDriver protocol).
+    ...                The file is always read from the machine running robot
+    ...                (your VDI). The cookies are sent to whichever browser
+    ...                the WebDriver session is connected to – local or remote.
+    ...
+    ...                Domain handling:
+    ...                  Corporate SSO cookies often use a leading dot domain
+    ...                  like ".cloud.uk.hsbc". We strip the leading dot when
+    ...                  calling Add Cookie because SeleniumLibrary adds it back,
+    ...                  and passing a double-dot domain causes the cookie to be
+    ...                  rejected by the browser silently.
+    ${raw}=      Get File    ${cookie_file}
+    ${cookies}=  Evaluate    __import__('json').loads($raw)
+    ${injected}=    Set Variable    ${0}
     FOR    ${cookie}    IN    @{cookies}
-        Run Keyword And Ignore Error
+        # Skip template/comment entries that have no real value
+        ${is_real}=    Run Keyword And Return Status
+        ...    Should Not Contain    ${cookie}[name]    _comment
+        Continue For Loop If    not ${is_real}
+        # Strip leading dot from domain – SeleniumLibrary handles it
+        ${domain}=    Evaluate
+        ...    $cookie.get('domain','').lstrip('.')
+        ${status}=    Run Keyword And Ignore Error
         ...    Add Cookie
         ...    ${cookie}[name]
         ...    ${cookie}[value]
-        ...    domain=${cookie.get('domain', '')}
+        ...    domain=${domain}
         ...    path=${cookie.get('path', '/')}
         ...    secure=${cookie.get('secure', False)}
+        ${injected}=    Evaluate    ${injected} + 1
     END
-    ${count}=    Get Length    ${cookies}
-    Log    ✔ Injected ${count} cookies into browser
+    ${log_count}=    Set Variable    Injected ${injected} cookies into browser session
+    Log    ${log_count}
 
 _Login Via SSO Button Click
     [Documentation]    Standard SSO button click. Works on VDI where the
