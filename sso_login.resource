@@ -240,20 +240,20 @@ Extract And Save Session Cookies
     ...                Usage:
     ...                  1. Manually open the browser and log in via SSO
     ...                  2. Call this keyword (e.g. from a one-off robot script)
-    ...                  3. Commit cookies.json to your secure credentials store
+    ...                  3. Store cookies.json in a secure location
     ...                     (never commit to public git)
     ...                  4. Re-run when cookies expire (typically 8-24h)
+    # Get cookies as a list of dicts directly – avoids multi-line Evaluate
     ${raw_cookies}=    Get Cookies    as_dict=False
-    # Convert selenium cookie objects to plain dicts
-    ${cookie_list}=    Evaluate    [
-    ...        {'name': c.get('name',''), 'value': c.get('value',''),
-    ...         'domain': c.get('domain',''), 'path': c.get('path','/'),
-    ...         'secure': c.get('secure', False),
-    ...         'httpOnly': c.get('httpOnly', False)}
-    ...        for c in $raw_cookies
-    ...    ]
+    # Build the Python expression as a single string variable first.
+    # Multi-line Evaluate expressions are split by Robot into multiple
+    # arguments causing "expected 1 to 3 arguments, got N" errors.
+    ${py_expr}=    Set Variable
+    ...    [{'name': c.get('name',''), 'value': c.get('value',''), 'domain': c.get('domain',''), 'path': c.get('path','/'), 'secure': c.get('secure',False), 'httpOnly': c.get('httpOnly',False)} for c in $raw_cookies]
+    ${cookie_list}=    Evaluate    ${py_expr}
     ${json_str}=    Evaluate    __import__('json').dumps($cookie_list, indent=2)
-    Create File     ${COOKIES_FILE}    ${json_str}
-    ${count}=       Get Length    ${cookie_list}
-    Log    ✔ Saved ${count} cookies to ${COOKIES_FILE}
+    Create File    ${COOKIES_FILE}    ${json_str}
+    ${count}=      Get Length    ${cookie_list}
+    ${log_saved}=  Set Variable    Saved ${count} cookies to ${COOKIES_FILE}
+    Log    ${log_saved}
     Log    Re-extract when SSO session expires (typically 8-24 hours)
