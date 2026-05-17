@@ -45,15 +45,24 @@ Resource    ../config/global_variables.robot
 Resource    ../config/env_config.resource
 
 *** Variables ***
-# Path to the saved SSO session cookies file
-${COOKIES_FILE}         ${CURDIR}/../../config/testdata/cookies.json
+# Path to saved SSO session cookies file (Strategy 1 – cookie injection)
+${COOKIES_FILE}             ${CURDIR}/../../config/testdata/cookies.json
 
-# Path to Chrome user profile directory (Strategy 2)
-# Windows example: C:/Users/<you>/AppData/Local/Google/Chrome/User Data
-${CHROME_PROFILE_DIR}   ${EMPTY}
+# Path to saved localStorage/sessionStorage file (Strategy 1b – storage injection)
+${STORAGE_FILE}             ${CURDIR}/../../config/testdata/storage.json
 
-# Chrome profile name inside the user data dir (usually "Default")
-${CHROME_PROFILE_NAME}  Default
+# Chrome user profile directory (Strategy 2)
+# Windows: C:/Users/<you>/AppData/Local/Google/Chrome/User Data
+${CHROME_PROFILE_DIR}       ${EMPTY}
+${CHROME_PROFILE_NAME}      Default
+
+# localStorage key names the app uses for auth token.
+# Run in DevTools Console after login: Object.keys(localStorage)
+# to find the exact key names your app uses.
+# Common values: token, access_token, authToken, id_token, user
+# Set as a comma-separated list if multiple keys need injecting:
+#   ${STORAGE_TOKEN_KEYS}    token,user,refresh_token
+${STORAGE_TOKEN_KEYS}       token
 
 *** Keywords ***
 # ════════════════════════════════════════════════════════════════════
@@ -64,30 +73,49 @@ ${CHROME_PROFILE_NAME}  Default
 # ════════════════════════════════════════════════════════════════════
 
 Login Via SSO And Wait For App Shell
-    [Documentation]    Injects saved SSO cookies into the browser so the app
-    ...                sees an authenticated session without going through the
-    ...                SSO prompt.
+    [Documentation]    Handles SSO login using the best available method.
     ...
-    ...                Works for BOTH local and remote browser execution:
-    ...                  Local:  cookies.json read from VDI, injected into local Chrome
-    ...                  Remote: cookies.json read from VDI (file stays on VDI),
-    ...                          injected into the remote browser via WebDriver protocol.
-    ...                          SeleniumLibrary's Add Cookie sends commands to whichever
-    ...                          browser the WebDriver session is connected to.
+    ...                Detection order (first match wins):
+    ...                  1. storage.json exists → inject localStorage/sessionStorage tokens
+    ...                     (use when app stores auth in Local Storage not cookies)
+    ...                  2. cookies.json exists → inject session cookies
+    ...                     (use when app stores auth in cookies)
+    ...                  3. Neither file found  → click SSO button
+    ...                     (works on VDI with active Kerberos ticket)
     ...
-    ...                Falls back to SSO button click if no cookies.json found.
-    ...                Cookie file: config/testdata/cookies.json
+    ...                To set up storage injection (your app uses Local Storage):
+    ...                  robot scripts/extract_storage.robot
+    ...
+    ...                To set up cookie injection:
+    ...                  robot scripts/extract_cookies.robot
+    ${has_storage}=    Run Keyword And Return Status
+    ...    File Should Exist    ${STORAGE_FILE}
     ${has_cookies}=    Run Keyword And Return Status
     ...    File Should Exist    ${COOKIES_FILE}
-    Run Keyword If    ${has_cookies}
+
+    Run Keyword If    ${has_storage}
+    ...    _Login Via Storage Injection
+    ...    ELSE IF    ${has_cookies}
     ...    _Login Via Cookie Injection
     ...    ELSE
     ...    _Login Via SSO Button Click
-    # Wait for the sidebar to confirm the app shell has loaded
+
+    # Wait for sidebar to confirm the app shell has loaded
     Wait Until Element Is Visible
     ...    xpath=//*[contains(@class,'sidebar') or contains(@class,'side-nav')]
     ...    timeout=30s
-    ...    error=App shell did not load after SSO. Check cookie freshness or SSO button flow.
+    ...    error=App shell did not load. Check storage.json/cookies.json freshness or SSO flow.
+
+_Login Via Storage Injection
+    [Documentation]    Navigates to BASE_URL, injects localStorage and
+    ...                sessionStorage tokens from storage.json, then reloads
+    ...                so the app picks up the injected auth tokens.
+    ${log_msg}=    Set Variable    Injecting storage tokens from ${STORAGE_FILE}
+    Log    ${log_msg}
+    Go To    ${BASE_URL}
+    Sleep    ${ANIMATION_WAIT}
+    Inject Storage Tokens
+    Log    ✔ Storage tokens injected and page reloaded
 
 _Login Via Cookie Injection
     [Documentation]    Injects SSO cookies into the currently open browser session.
@@ -131,9 +159,11 @@ _Inject Cookies From File
         ${is_real}=    Run Keyword And Return Status
         ...    Should Not Contain    ${cookie}[name]    _comment
         Continue For Loop If    not ${is_real}
-        # Strip leading dot from domain – SeleniumLibrary handles it
-        ${domain}=    Evaluate
-        ...    $cookie.get('domain','').lstrip('.')
+        # Use cookie domain if present, fall back to BASE_URL hostname.
+        # Strip leading dot – SeleniumLibrary adds it back automatically.
+        ${raw_domain}=    Evaluate    $cookie.get('domain','')
+        ${base_host}=     Evaluate    __import__('urllib.parse',fromlist=['urlparse']).urlparse($BASE_URL).hostname
+        ${domain}=        Evaluate    $raw_domain.lstrip('.') if $raw_domain else $base_host
         ${status}=    Run Keyword And Ignore Error
         ...    Add Cookie
         ...    ${cookie}[name]
@@ -157,6 +187,91 @@ _Login Via SSO Button Click
     Click Element
     ...    xpath=//button[contains(normalize-space(.),'Sign In using SSO')] | //a[contains(normalize-space(.),'Sign In using SSO')]
     Wait For Condition    return document.readyState == "complete"    timeout=30s
+
+# ════════════════════════════════════════════════════════════════════
+# STRATEGY 1b – LOCAL STORAGE / SESSION STORAGE INJECTION
+#
+# Use when the app stores the auth token in localStorage or
+# sessionStorage instead of cookies (Application tab Cookies empty
+# but token visible under Local Storage or Session Storage).
+#
+# How it works:
+#   1. After manual SSO login, call Extract And Save Storage
+#   2. Saved to config/testdata/storage.json
+#   3. On next run, Login Via SSO And Wait For App Shell detects
+#      storage.json and injects the tokens via Execute Javascript
+#      before navigating to the app
+#
+# Find your token key in DevTools Console after login:
+#   Object.keys(localStorage)   → e.g. ["token", "user", "theme"]
+#   Object.keys(sessionStorage)  → e.g. ["session_id"]
+# Then set ${STORAGE_TOKEN_KEYS} in global_variables.robot
+# ════════════════════════════════════════════════════════════════════
+
+Extract And Save Storage
+    [Documentation]    Saves localStorage and sessionStorage contents to
+    ...                storage.json after SSO login.
+    ...                Run ONCE on your VDI after logging in via SSO.
+    ...                Re-run when the token expires (typically 8-24h).
+    # Read all localStorage entries via JavaScript
+    ${ls_keys_raw}=    Execute Javascript    return Object.keys(localStorage)
+    ${storage_data}=   Create Dictionary
+    ...    localStorage=${EMPTY}
+    ...    sessionStorage=${EMPTY}
+
+    # Collect localStorage
+    ${ls_dict}=    Create Dictionary
+    FOR    ${key}    IN    @{ls_keys_raw}
+        ${val}=    Execute Javascript    return localStorage.getItem('${key}')
+        Set To Dictionary    ${ls_dict}    ${key}=${val}
+    END
+    Set To Dictionary    ${storage_data}    localStorage=${ls_dict}
+
+    # Collect sessionStorage
+    ${ss_keys_raw}=    Execute Javascript    return Object.keys(sessionStorage)
+    ${ss_dict}=    Create Dictionary
+    FOR    ${key}    IN    @{ss_keys_raw}
+        ${val}=    Execute Javascript    return sessionStorage.getItem('${key}')
+        Set To Dictionary    ${ss_dict}    ${key}=${val}
+    END
+    Set To Dictionary    ${storage_data}    sessionStorage=${ss_dict}
+
+    # Write to JSON file
+    ${json_str}=    Evaluate    __import__('json').dumps($storage_data, indent=2)
+    Create File    ${STORAGE_FILE}    ${json_str}
+
+    ${ls_count}=    Get Length    ${ls_keys_raw}
+    ${ss_count}=    Get Length    ${ss_keys_raw}
+    ${log_msg}=    Set Variable    Saved ${ls_count} localStorage + ${ss_count} sessionStorage entries to ${STORAGE_FILE}
+    Log    ${log_msg}
+    Log    Re-extract when SSO session expires (typically 8-24 hours)
+
+Inject Storage Tokens
+    [Documentation]    Reads storage.json and injects all saved localStorage
+    ...                and sessionStorage entries into the browser via JS.
+    ...                Then reloads so the app picks up the injected tokens.
+    ${err}=    Set Variable    storage.json not found at ${STORAGE_FILE}. Run Extract And Save Storage first.
+    File Should Exist    ${STORAGE_FILE}    msg=${err}
+
+    ${raw}=       Get File    ${STORAGE_FILE}
+    ${data}=      Evaluate    __import__('json').loads($raw)
+
+    # Inject localStorage entries
+    ${ls_data}=    Get From Dictionary    ${data}    localStorage
+    FOR    ${key}    ${value}    IN    &{ls_data}
+        Execute Javascript    localStorage.setItem('${key}', '${value}')
+    END
+
+    # Inject sessionStorage entries
+    ${ss_data}=    Get From Dictionary    ${data}    sessionStorage
+    FOR    ${key}    ${value}    IN    &{ss_data}
+        Execute Javascript    sessionStorage.setItem('${key}', '${value}')
+    END
+
+    # Reload so the app reads the injected tokens from storage
+    Reload Page
+    Wait For Condition    return document.readyState == "complete"    timeout=30s
+    Log    ✔ localStorage and sessionStorage injected, page reloaded
 
 # ════════════════════════════════════════════════════════════════════
 # STRATEGY 2 – CHROME PROFILE REUSE
@@ -237,23 +352,48 @@ Extract And Save Session Cookies
     ...                through SSO. The saved cookies are then used by
     ...                Login Via SSO And Wait For App Shell in all future runs.
     ...
+    ...                FIX: Uses Get Cookies as_dict=True which returns proper
+    ...                Python dicts with all fields populated. Previous version
+    ...                used as_dict=False which returns Selenium cookie objects
+    ...                where .get() fails silently giving empty values.
+    ...
     ...                Usage:
     ...                  1. Manually open the browser and log in via SSO
     ...                  2. Call this keyword (e.g. from a one-off robot script)
     ...                  3. Store cookies.json in a secure location
-    ...                     (never commit to public git)
     ...                  4. Re-run when cookies expire (typically 8-24h)
-    # Get cookies as a list of dicts directly – avoids multi-line Evaluate
-    ${raw_cookies}=    Get Cookies    as_dict=False
-    # Build the Python expression as a single string variable first.
-    # Multi-line Evaluate expressions are split by Robot into multiple
-    # arguments causing "expected 1 to 3 arguments, got N" errors.
+    # Use CDP Network.getAllCookies to capture ALL cookies including
+    # HttpOnly ones. document.cookie and Get Cookies cannot read HttpOnly
+    # cookies because the browser blocks JavaScript access to them.
+    # CDP bypasses this restriction by talking directly to the browser engine.
+    ${cdp_result}=    Execute Cdp Command
+    ...    Network.getAllCookies
+    ...    {}
+    ${all_cookies}=    Get From Dictionary    ${cdp_result}    cookies
+
+    # Filter to cookies relevant to this domain only
+    ${base_host}=    Evaluate
+    ...    __import__('urllib.parse', fromlist=['urlparse']).urlparse($BASE_URL).hostname
     ${py_expr}=    Set Variable
-    ...    [{'name': c.get('name',''), 'value': c.get('value',''), 'domain': c.get('domain',''), 'path': c.get('path','/'), 'secure': c.get('secure',False), 'httpOnly': c.get('httpOnly',False)} for c in $raw_cookies]
-    ${cookie_list}=    Evaluate    ${py_expr}
+    ...    [c for c in $all_cookies if $base_host in c.get('domain','') or c.get('domain','').lstrip('.') in $base_host]
+    ${site_cookies}=    Evaluate    ${py_expr}
+
+    # Build clean list with only the fields needed for injection
+    ${cookie_list}=    Create List
+    FOR    ${cookie}    IN    @{site_cookies}
+        ${entry}=    Create Dictionary
+        ...    name=${cookie}[name]
+        ...    value=${cookie}[value]
+        ...    domain=${cookie}[domain]
+        ...    path=${cookie}[path]
+        ...    secure=${cookie.get('secure', False)}
+        ...    httpOnly=${cookie.get('httpOnly', False)}
+        Append To List    ${cookie_list}    ${entry}
+    END
+
     ${json_str}=    Evaluate    __import__('json').dumps($cookie_list, indent=2)
     Create File    ${COOKIES_FILE}    ${json_str}
     ${count}=      Get Length    ${cookie_list}
-    ${log_saved}=  Set Variable    Saved ${count} cookies to ${COOKIES_FILE}
+    ${log_saved}=  Set Variable    Saved ${count} cookies (including HttpOnly) to ${COOKIES_FILE}
     Log    ${log_saved}
     Log    Re-extract when SSO session expires (typically 8-24 hours)
