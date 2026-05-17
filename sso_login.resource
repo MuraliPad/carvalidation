@@ -250,22 +250,35 @@ Inject Storage Tokens
     [Documentation]    Reads storage.json and injects all saved localStorage
     ...                and sessionStorage entries into the browser via JS.
     ...                Then reloads so the app picks up the injected tokens.
-    ${err}=    Set Variable    storage.json not found at ${STORAGE_FILE}. Run Extract And Save Storage first.
+    ...
+    ...                FIX: Uses JSON.stringify on the Python side to safely
+    ...                pass token values that contain quotes, dots, equals signs
+    ...                and other special characters (JWT tokens contain all of
+    ...                these). Direct string interpolation into JS breaks on
+    ...                any token with a single quote or backslash in it.
+    ${err}=    Set Variable    storage.json not found at ${STORAGE_FILE}. Run scripts/extract_storage.robot first.
     File Should Exist    ${STORAGE_FILE}    msg=${err}
 
-    ${raw}=       Get File    ${STORAGE_FILE}
-    ${data}=      Evaluate    __import__('json').loads($raw)
+    ${raw}=     Get File    ${STORAGE_FILE}
+    ${data}=    Evaluate    __import__('json').loads($raw)
 
-    # Inject localStorage entries
+    # Inject localStorage entries.
+    # Pass key and value via JSON.stringify so special characters in JWT
+    # tokens (dots, equals, quotes) do not break the JavaScript string.
     ${ls_data}=    Get From Dictionary    ${data}    localStorage
     FOR    ${key}    ${value}    IN    &{ls_data}
-        Execute Javascript    localStorage.setItem('${key}', '${value}')
+        # Safely encode key and value as JSON strings before passing to JS
+        ${safe_key}=      Evaluate    __import__('json').dumps($key)
+        ${safe_value}=    Evaluate    __import__('json').dumps($value)
+        Execute Javascript    localStorage.setItem(${safe_key}, ${safe_value})
     END
 
-    # Inject sessionStorage entries
+    # Inject sessionStorage entries using the same safe pattern
     ${ss_data}=    Get From Dictionary    ${data}    sessionStorage
     FOR    ${key}    ${value}    IN    &{ss_data}
-        Execute Javascript    sessionStorage.setItem('${key}', '${value}')
+        ${safe_key}=      Evaluate    __import__('json').dumps($key)
+        ${safe_value}=    Evaluate    __import__('json').dumps($value)
+        Execute Javascript    sessionStorage.setItem(${safe_key}, ${safe_value})
     END
 
     # Reload so the app reads the injected tokens from storage
