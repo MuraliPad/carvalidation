@@ -272,3 +272,44 @@ Open Fresh Browser Login And Go To
     Open Browser And Navigate To App
     Login Via SSO And Wait For App Shell
     Run Keyword    ${nav_keyword}
+
+
+Load Base URL
+    [Documentation]    Navigate to ${BASE_URL} with renderer-timeout retry
+    ...                 and verify the app shell has rendered.
+    ...
+    ...                 Can also be called mid-test to return to the app root:
+    ...                 | Load Base URL |
+    ...                 | Load Base URL | url=${BASE_URL}/dashboard |
+    [Arguments]
+    ...    ${url}=${BASE_URL}
+    ...    ${max_attempts}=3
+    ...    ${ready_locator}=tag:body
+
+    FOR    ${attempt}    IN RANGE    1    ${max_attempts + 1}
+        TRY
+            Log    Loading base URL — attempt ${attempt}/${max_attempts}: ${url}    console=True
+            Go To    ${url}
+
+            # Wait for DOM ready + app shell element
+            Wait Until Page Contains Element    ${ready_locator}
+            ...    timeout=${PAGE_LOAD_TIMEOUT}
+            Wait For Condition
+            ...    return document.readyState === 'complete' ||
+            ...           document.readyState === 'interactive'
+            ...    timeout=${PAGE_LOAD_TIMEOUT}
+
+            Log    ✓ Base URL loaded on attempt ${attempt}    console=True
+            RETURN
+        EXCEPT    *TimeoutException*    type=GLOB    AS    ${error}
+            Log    Renderer timeout on attempt ${attempt}    level=WARN
+            IF    ${attempt} == ${max_attempts}
+                Capture Page Screenshot
+                Fatal Error
+                ...    Base URL failed to load after ${max_attempts} attempts: ${url}
+                ...    Last error: ${error}
+            END
+            Execute Javascript    window.stop();
+            Sleep    2s
+        END
+    END
