@@ -276,29 +276,25 @@ Open Fresh Browser Login And Go To
 
 Load Base URL
     [Documentation]    Navigate to ${BASE_URL} with renderer-timeout retry
-    ...                 and verify the app shell has rendered.
-    ...
-    ...                 Can also be called mid-test to return to the app root:
-    ...                 | Load Base URL |
-    ...                 | Load Base URL | url=${BASE_URL}/dashboard |
+    ...                and verify the app shell has rendered.
     [Arguments]
     ...    ${url}=${BASE_URL}
     ...    ${max_attempts}=3
     ...    ${ready_locator}=tag:body
 
-    FOR    ${attempt}    IN RANGE    1    ${max_attempts + 1}
+    # Convert string → int so arithmetic and comparisons work
+    ${max_attempts}=    Convert To Integer    ${max_attempts}
+    ${last_attempt}=    Evaluate    ${max_attempts} + 1
+
+    FOR    ${attempt}    IN RANGE    1    ${last_attempt}
         TRY
             Log    Loading base URL — attempt ${attempt}/${max_attempts}: ${url}    console=True
             Go To    ${url}
-
-            # Wait for DOM ready + app shell element
             Wait Until Page Contains Element    ${ready_locator}
             ...    timeout=${PAGE_LOAD_TIMEOUT}
             Wait For Condition
-            ...    return document.readyState === 'complete' ||
-            ...           document.readyState === 'interactive'
+            ...    return document.readyState === 'complete' || document.readyState === 'interactive'
             ...    timeout=${PAGE_LOAD_TIMEOUT}
-
             Log    ✓ Base URL loaded on attempt ${attempt}    console=True
             RETURN
         EXCEPT    *TimeoutException*    type=GLOB    AS    ${error}
