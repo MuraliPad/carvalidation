@@ -410,3 +410,50 @@ Extract And Save Session Cookies
     ${log_saved}=  Set Variable    Saved ${count} cookies (including HttpOnly) to ${COOKIES_FILE}
     Log    ${log_saved}
     Log    Re-extract when SSO session expires (typically 8-24 hours)
+
+Inject SSO Session And Reload App
+    [Documentation]    Injects storage.json session state, then reloads the app
+    ...                so it picks up the authenticated session.
+    ...                Retries the full inject+reload cycle on renderer timeouts.
+
+    FOR    ${attempt}    IN RANGE    1    4
+        TRY
+            Log    SSO inject and reload attempt ${attempt}/3    console=True
+
+            # ── Step 1: Land on the app origin (required for injection) ──
+            Go To    ${BASE_URL}
+
+            # ── Step 2: Inject cookies + localStorage from storage.json ──
+            Inject Session From Storage JSON    ${STORAGE_JSON_PATH}
+
+            # ── Step 3: Reload so the app reads the injected session ─────
+            Go To    ${BASE_URL}
+            Wait For Page To Be Ready
+
+            Log    ✓ SSO session active on attempt ${attempt}    console=True
+            BREAK
+        EXCEPT    *imeout*    type=GLOB    AS    ${error}
+            Log    SSO reload attempt ${attempt} timed out    level=WARN
+            IF    ${attempt} == 3
+                Capture Page Screenshot
+                ${msg}=    Catenate    SEPARATOR=${\n}
+                ...    SSO injection and reload failed after 3 attempts: ${BASE_URL}
+                ...    Last error: ${error}
+                Fatal Error    ${msg}
+            END
+            Execute Javascript    window.stop();
+            Sleep    2s
+        END
+    END
+
+    # ── Post-injection guard: did SSO actually take? ───────────────────
+    ${on_login}=    Run Keyword And Return Status
+    ...    Page Should Contain Element    ${LOGIN_APP_TITLE}
+    IF    ${on_login}
+        Capture Page Screenshot
+        ${msg}=    Catenate    SEPARATOR=${\n}
+        ...    SSO session was not accepted — redirected to Microsoft login.
+        ...    Tokens in storage.json are likely expired.
+        ...    Re-run capture_storage_session.py and update the Jenkins credential.
+        Fatal Error    ${msg}
+    END
