@@ -496,3 +496,29 @@ Inject Storage Token And Reload
             ...    Inject Session From Storage JSON    ${storage_path}
         END
     END
+
+
+# Reload so the app reads the injected tokens from storage
+    # Retries up to 3 times on renderer timeouts (remote grid)
+    FOR    ${attempt}    IN RANGE    1    4
+        TRY
+            Log    Reload attempt ${attempt}/3    console=True
+            Reload Page
+            Wait For Condition
+            ...    return document.readyState == "complete" || document.readyState == "interactive"
+            ...    timeout=30s
+            Log    localStorage and sessionStorage injected, page reloaded on attempt ${attempt}    console=True
+            BREAK
+        EXCEPT    *imeout*    type=GLOB    AS    ${error}
+            Log    Reload attempt ${attempt} timed out    level=WARN
+            IF    ${attempt} == 3
+                Capture Page Screenshot
+                ${msg}=    Catenate    SEPARATOR=${\n}
+                ...    Page reload failed after 3 attempts post-injection.
+                ...    Last error: ${error}
+                Fatal Error    ${msg}
+            END
+            Execute Javascript    window.stop();
+            Sleep    2s
+        END
+    END
