@@ -457,3 +457,42 @@ Inject SSO Session And Reload App
         ...    Re-run capture_storage_session.py and update the Jenkins credential.
         Fatal Error    ${msg}
     END
+
+Inject Storage Token And Reload
+    [Documentation]    Injects cookies + localStorage from storage.json into the
+    ...                current session, then reloads the app with retry so it
+    ...                picks up the authenticated session.
+    ...                Only the reload retries — injection runs once.
+    [Arguments]    ${storage_path}=${STORAGE_JSON_PATH}
+
+    # ── Injection — runs once, no retry needed (local JS/cookie calls) ──
+    Inject Session From Storage JSON    ${storage_path}
+    Log    Session tokens injected from storage.json    console=True
+
+    # ── Reload with retry — this is where renderer timeouts happen ──────
+    FOR    ${attempt}    IN RANGE    1    4
+        TRY
+            Log    Reload attempt ${attempt}/3: ${BASE_URL}    console=True
+            Go To    ${BASE_URL}
+            Wait For Page To Be Ready
+            Log    ✓ App reloaded with session on attempt ${attempt}    console=True
+            BREAK
+        EXCEPT    *imeout*    type=GLOB    AS    ${error}
+            Log    Reload attempt ${attempt} timed out    level=WARN
+            IF    ${attempt} == 3
+                Capture Page Screenshot
+                ${msg}=    Catenate    SEPARATOR=${\n}
+                ...    App reload failed after 3 attempts post-injection: ${BASE_URL}
+                ...    Last error: ${error}
+                Fatal Error    ${msg}
+            END
+            Execute Javascript    window.stop();
+            Sleep    2s
+            # ── Re-inject before next attempt — cheap insurance ─────────
+            # window.stop() on a partially-navigated page can leave
+            # localStorage in an uncertain state. Re-injecting is
+            # idempotent and costs milliseconds.
+            Run Keyword And Ignore Error
+            ...    Inject Session From Storage JSON    ${storage_path}
+        END
+    END
